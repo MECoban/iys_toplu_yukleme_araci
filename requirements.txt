@@ -1,5 +1,4 @@
 pandas
 streamlit
 requests
-openpyxl
-python-dotenv 
+openpyxl 

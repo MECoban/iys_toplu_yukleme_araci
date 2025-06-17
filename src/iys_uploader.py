@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Iterator
 import urllib.parse
 import time
 import os
-from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +25,6 @@ STATUS_CHECK_URL = f"{BASE_URL}/consents/request/{{requestId}}"
 
 class IYSConsentUploader:
     def __init__(self):
-        load_dotenv()
         self.base_url = "https://api.iys.org.tr/oauth2/token"
         self.consent_url = "https://api.iys.org.tr/sps/consents/request"
         self.username = os.getenv("IYS_USERNAME")
