@@ -43,18 +43,6 @@ if uploaded_file:
             st.success("Tüm gerekli kolonlar bulundu.")
             st.header("3. Yüklemeyi Başlatın")
             if st.button("İzinleri İYS'ye Yükle", type="primary", key="add_button"):
-                # --- DEBUGGING START ---
-                st.warning("--- GÜVENLİK UYARISI: GEÇİCİ HATA AYIKLAMA MESAJLARI ---")
-                read_username = os.getenv("IYS_USERNAME")
-                read_password = os.getenv("IYS_PASSWORD")
-                st.info(f"Okunan Kullanıcı Adı: '{read_username}'")
-                if read_password:
-                    st.info(f"Okunan Şifre (ilk/son 3 karakter): '{read_password[:3]}...{read_password[-3:]}'")
-                else:
-                    st.error("Şifre (IYS_PASSWORD) okunamadı veya boş.")
-                st.warning("--- HATA AYIKLAMA SONU ---")
-                # --- DEBUGGING END ---
-                
                 uploader = IYSConsentUploader()
                 with st.spinner("İYS'ye bağlanılıyor ve yükleme işlemi başlatılıyor..."):
                     st.subheader("Yükleme Günlüğü")
