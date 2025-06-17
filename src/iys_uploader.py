@@ -34,7 +34,7 @@ class IYSConsentUploader:
         self.brand_code = 283296
 
         if not self.username or not self.password:
-            raise ValueError("IYS_USERNAME and IYS_PASSWORD must be set in the .env file.")
+            raise ValueError("IYS_USERNAME and IYS_PASSWORD must be set as environment variables (Streamlit Secrets veya sunucu ortam değişkeni).")
 
         self.token = None
         self.headers = None
