@@ -40,16 +40,20 @@ class IYSConsentUploader:
         self.headers = None
 
     def get_token(self) -> str:
-        """Get OAuth2 access token from IYS API."""
+        """Fetches the OAuth2 token from IYS."""
+        logging.info("Attempting to get IYS token...")
         try:
-            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            # Prepare payload for token request
             payload = {
-                'grant_type': 'password',
-                'username': self.username,
-                'password': self.password
+                'grant_type': 'client_credentials',
+                'client_id': self.username,
+                'client_secret': self.password,
+                'scope': 'iys'
             }
-            payload_encoded = urllib.parse.urlencode(payload)
-            response = requests.post(TOKEN_URL, data=payload_encoded, headers=headers)
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+            response = requests.post(TOKEN_URL, data=payload, headers=headers)
             response.raise_for_status()
             self.token = response.json()['access_token']
             
