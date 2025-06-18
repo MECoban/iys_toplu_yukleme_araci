@@ -1,208 +1,207 @@
-import pandas as pd
 import requests
-import logging
-from typing import List, Dict, Any, Iterator
-import urllib.parse
+import pandas as pd
 import time
+import logging
 import os
+import urllib.parse
+from typing import Any, Generator, Dict
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('iys_operations.log'),
-        logging.StreamHandler()
-    ]
-)
-
-# ------- CONFIGURATION -------
-TOKEN_URL = "https://api.iys.org.tr/oauth2/token"
-# Renamed for clarity
-BASE_URL = "https://api.iys.org.tr/sps/710271/brands/710271"
-ADD_CONSENTS_URL = f"{BASE_URL}/consents/request"
-STATUS_CHECK_URL = f"{BASE_URL}/consents/request/{{requestId}}"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class IYSConsentUploader:
     def __init__(self):
-        self.base_url = "https://api.iys.org.tr/oauth2/token"
-        self.consent_url = "https://api.iys.org.tr/sps/consents/request"
+        self.token_url = "https://api.iys.org.tr/oauth2/token"
+        
+        # IYS Numaranız ve Marka Kodunuzu buraya girin
+        iys_no = 710271
+        brand_code = 710271 # Genellikle IYS No ile aynıdır, değilse değiştirin
+
+        # URL'leri dinamik olarak oluştur
+        base_sps_url = f"https://api.iys.org.tr/sps/{iys_no}/brands/{brand_code}"
+        self.consent_url = f"{base_sps_url}/consents/request"
+        self.status_url_template = f"{base_sps_url}/consents/request/{{}}"
+
         self.username = os.getenv("IYS_USERNAME")
         self.password = os.getenv("IYS_PASSWORD")
         self.access_token = None
-        self.request_id = None
-        self.brand_code = 283296
+        self.brand_code = brand_code
 
         if not self.username or not self.password:
-            raise ValueError("IYS_USERNAME and IYS_PASSWORD must be set as environment variables (Streamlit Secrets veya sunucu ortam değişkeni).")
+            raise ValueError("IYS_USERNAME and IYS_PASSWORD must be set as environment variables (Streamlit Secrets or server environment variables).")
 
-        self.token = None
-        self.headers = None
-
-    def get_token(self) -> str:
-        """Fetches the OAuth2 token from IYS."""
+    def get_token(self) -> bool:
+        """Fetches the OAuth2 token from IYS. Returns True on success, False on failure."""
         logging.info("Attempting to get IYS token...")
         try:
-            # Prepare payload for token request
             payload = {
-                'grant_type': 'client_credentials',
-                'client_id': self.username,
-                'client_secret': self.password,
-                'scope': 'iys'
+                'grant_type': 'password',
+                'username': self.username,
+                'password': self.password
             }
             headers = {
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
-            response = requests.post(TOKEN_URL, data=payload, headers=headers)
+            payload_encoded = urllib.parse.urlencode(payload)
+            response = requests.post(self.token_url, data=payload_encoded, headers=headers)
             response.raise_for_status()
-            self.token = response.json()['access_token']
-            
-            self.headers = {
-                'Authorization': f'Bearer {self.token}',
-                'Content-Type': 'application/json'
-            }
-
-            logging.info("Successfully obtained access token")
-            return self.token
-
+            self.access_token = response.json().get('access_token')
+            if self.access_token:
+                logging.info("Successfully obtained IYS token.")
+                return True
+            else:
+                logging.error("API response did not contain an access_token.")
+                return False
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error obtaining access token: {str(e)}")
-            if hasattr(e.response, 'text'):
-                logging.error(f"Response content: {e.response.text}")
-            raise
+            error_details = e.response.text if e.response else "No response from server"
+            logging.error(f"API Error during token fetch - {str(e)} | Details: {error_details}")
+            return False
 
     def format_phone_number(self, phone: Any) -> str:
-        """Format phone number to include country code."""
-        phone_str = str(phone)
-        phone = ''.join(filter(str.isdigit, phone_str))
-        if not phone.startswith('90'):
-            phone = '90' + phone
-        return '+' + phone
+        """Formats the phone number to the required +90 E.164 format."""
+        phone_str = str(phone).strip()
+        # Remove .0 suffix if it exists (from float conversion)
+        if phone_str.endswith('.0'):
+            phone_str = phone_str[:-2]
 
-    def chunk_list(self, lst: List[Any], chunk_size: int = 50) -> List[List[Any]]:
-        """Split list into chunks of specified size."""
-        return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
-    
+        if not phone_str.startswith('+'):
+            if phone_str.startswith('90'):
+                phone_str = '+' + phone_str
+            # Standard Turkish mobile numbers are 10 digits (e.g., 5xxxxxxxxx)
+            elif len(phone_str) == 10:
+                phone_str = '+90' + phone_str
+            else:
+                # Fallback for numbers that might already include country code but no +
+                phone_str = '+' + phone_str
+        return phone_str
+
     def add_consents(self, consent_data: list) -> str:
         """Submits a consent request and returns the request ID."""
-        if not self.token:
-            self.get_token()
-        
+        if not self.access_token:
+            if not self.get_token():
+                raise ConnectionError("Failed to authenticate with IYS. Cannot add consents.")
+
         logging.info(f"Submitting consent request for {len(consent_data)} recipients...")
-        response = requests.post(ADD_CONSENTS_URL, json=consent_data, headers=self.headers)
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        response = requests.post(self.consent_url, json=consent_data, headers=headers)
         response.raise_for_status()
         response_json = response.json()
         request_id = response_json.get("requestId")
-        logging.info(f"Request accepted with ID: {request_id}")
+        if not request_id:
+            raise ValueError(f"Could not get requestId from IYS. Response: {response_json}")
+        logging.info(f"Consent request submitted successfully. Request ID: {request_id}")
         return request_id
 
-    def check_request_status(self, request_id: str) -> Any:
-        """
-        Polls the status of a bulk request. Returns the final JSON response,
-        which could be a dict or a list.
-        """
-        if not self.token:
-            self.get_token()
+    def check_consent_status(self, request_id: str) -> Dict:
+        """Checks the status of a previously submitted consent request."""
+        if not self.access_token:
+            if not self.get_token():
+                raise ConnectionError("Failed to authenticate with IYS. Cannot check status.")
         
-        status_url = STATUS_CHECK_URL.format(requestId=request_id)
-        # Poll for up to 60 seconds
-        for i in range(12):
-            logging.info(f"Checking status for request {request_id} (Attempt {i+1})...")
-            response = requests.get(status_url, headers=self.headers)
-            response.raise_for_status()
-            result = response.json()
-            
-            # Define all possible "in-progress" statuses
-            in_progress_statuses = {"PENDING", "ENQUEUE", "IN_PROGRESS"}
+        status_url = self.status_url_template.format(request_id)
+        headers = {'Authorization': f'Bearer {self.access_token}'}
+        logging.info(f"Checking status for request {request_id}...")
+        response = requests.get(status_url, headers=headers)
+        response.raise_for_status()
+        return response.json()
 
-            # Determine if we should keep polling
-            keep_polling = False
-            if isinstance(result, dict) and result.get("status") in in_progress_statuses:
-                keep_polling = True
-            elif isinstance(result, list):
-                # If we get a list, we must check if ANY item is still processing
-                if any(isinstance(item, dict) and item.get('status') in in_progress_statuses for item in result):
-                    keep_polling = True
-
-            if keep_polling:
-                logging.info(f"Request {request_id} still processing, waiting 5 seconds...")
-                time.sleep(5)
-            else:
-                # If no items are in-progress, we have the final result
-                logging.info(f"Final status received for request {request_id}.")
-                return result
-        
-        raise Exception("Request timed out after 60 seconds. The server took too long to process the request.")
-
-    def process_dataframe(self, df: pd.DataFrame) -> Iterator[Dict[str, Any]]:
-        """
-        Processes a DataFrame to upload consents, yielding progress and results.
-        """
+    def process_dataframe(self, df: pd.DataFrame) -> Generator[Dict[str, Any], None, None]:
+        """Processes a DataFrame and yields status updates."""
         try:
-            required_columns = {'ALICI', 'ONAY(1)-RET(0)', 'IZIN TARIHI', 'IZIN TURU', 'IZIN KAYNAGI'}
-            if not required_columns.issubset(df.columns):
-                raise Exception(f"CSV must contain the following columns: {', '.join(required_columns)}")
+            if not self.get_token():
+                yield {'status': 'error', 'message': "IYS kimlik doğrulaması başarısız. Lütfen bilgileri kontrol edin.", 'progress': 0.0}
+                return
 
-            consent_data = []
-            for _, row in df.iterrows():
-                phone = self.format_phone_number(row['ALICI'])
-                consent_date = pd.to_datetime(row["IZIN TARIHI"], format='%d-%m-%Y %H:%M:%S').strftime('%Y-%m-%d %H:%M:%S')
-                status = "ONAY" if row["ONAY(1)-RET(0)"] == 1 else "RET"
-                
-                izin = {
-                    "recipient": phone,
-                    "type": row["IZIN TURU"],
-                    "source": row["IZIN KAYNAGI"],
-                    "status": status,
-                    "consentDate": consent_date,
-                    "recipientType": "BIREYSEL"
-                }
-                consent_data.append(izin)
+            yield {'status': 'info', 'message': 'İzin verileri hazırlanıyor...', 'progress': 0.1}
 
-            chunks = self.chunk_list(consent_data, 50)
-            total_chunks = len(chunks)
+            # Deduplicate based on recipient and type
+            original_count = len(df)
+            df_deduplicated = df.drop_duplicates(subset=['ALICI', 'IZIN TURU'], keep='last').copy()
+            deduplicated_count = len(df_deduplicated)
+            if original_count > deduplicated_count:
+                removed_count = original_count - deduplicated_count
+                yield {'status': 'warning', 'message': f"{removed_count} adet tekrar eden kayıt bulundu ve listeden kaldırıldı.", 'progress': 0.15}
 
-            for i, chunk in enumerate(chunks):
-                try:
-                    request_id = self.add_consents(chunk)
-                    yield {'status': 'info', 'progress': (i + 0.5) / total_chunks, 'message': f"Chunk {i+1}/{total_chunks}: Request submitted with ID: {request_id}. Now checking for final status..."}
-                    
-                    final_result = self.check_request_status(request_id)
-                    
-                    if isinstance(final_result, dict):
-                        # This case is less likely, but we keep it for robustness
-                        success_count = final_result.get('completedCount', 0)
-                        failed_items = final_result.get('subRequestErrors', [])
-                        fail_count = final_result.get('failedCount', len(failed_items))
-                        
-                        yield {'status': 'success', 'progress': (i + 1) / total_chunks, 'message': f"Chunk {i+1}/{total_chunks}: Processing complete. Success: {success_count}, Failed: {fail_count}."}
+            consent_list = []
+            for _, row in df_deduplicated.iterrows():
+                # Ensure type and source are strings to prevent errors with empty cells (NaN)
+                izin_turu = str(row['IZIN TURU']) if pd.notna(row['IZIN TURU']) else ''
+                izin_kaynagi = str(row['IZIN KAYNAGI']) if pd.notna(row['IZIN KAYNAGI']) else ''
 
-                        if fail_count > 0:
-                             yield {'status': 'warning', 'progress': (i + 1) / total_chunks, 'message': f"Failed records details: {failed_items}"}
-                    
-                    elif isinstance(final_result, list):
-                        # This is the expected case based on the logs
-                        success_count = sum(1 for item in final_result if isinstance(item, dict) and item.get('status') == 'COMPLETED')
-                        failed_items = [item for item in final_result if isinstance(item, dict) and item.get('status') != 'COMPLETED']
-                        fail_count = len(failed_items)
+                # Skip rows with no permission type
+                if not izin_turu:
+                    continue
 
-                        yield {'status': 'success', 'progress': (i + 1) / total_chunks, 'message': f"Chunk {i+1}/{total_chunks}: Processing complete. Success: {success_count}, Failed: {fail_count}."}
-
-                        if fail_count > 0:
-                            yield {'status': 'warning', 'progress': (i + 1) / total_chunks, 'message': f"Failed records details: {failed_items}"}
-                    
-                    else:
-                        # Unexpected response type
-                        yield {'status': 'error', 'progress': (i + 1) / total_chunks, 'message': f"Chunk {i+1}/{total_chunks}: Unexpected API response type. Details: {final_result}"}
-
-                except requests.exceptions.RequestException as api_error:
-                    error_message = f"Chunk {i+1}/{total_chunks}: API Error - {api_error}"
-                    if hasattr(api_error.response, 'text'):
-                        error_message += f" | Details: {api_error.response.text}"
-                    yield {'status': 'error', 'progress': (i + 1) / total_chunks, 'message': error_message}
+                consent_list.append({
+                    "type": izin_turu.upper(),
+                    "status": "ONAY" if int(row['ONAY(1)-RET(0)']) == 1 else "RET",
+                    "source": izin_kaynagi,
+                    "recipient": self.format_phone_number(row['ALICI']),
+                    "recipientType": "BIREYSEL",
+                    "consentDate": pd.to_datetime(row['IZIN TARIHI'], format='%d-%m-%Y %H:%M:%S').strftime('%Y-%m-%d %H:%M:%S'),
+                })
             
-            yield {'status': 'complete', 'progress': 1.0, 'message': 'All chunks processed.'}
+            if not consent_list:
+                yield {'status': 'warning', 'message': 'Yüklenecek geçerli bir kayıt bulunamadı.', 'progress': 1.0}
+                return
 
+            yield {'status': 'info', 'message': f"{len(consent_list)} adet izin isteği gönderiliyor...", 'progress': 0.3}
+            request_id = self.add_consents(consent_list)
+            yield {'status': 'success', 'message': f"İstek başarıyla gönderildi. Talep ID: {request_id}", 'progress': 0.5}
+
+            # Polling for status
+            for i in range(12): # Poll for up to 2 minutes (12 * 10s)
+                time.sleep(10)
+                progress = 0.5 + (i + 1) * (0.5 / 12)
+                yield {'status': 'info', 'message': f"Sonuçlar kontrol ediliyor... (Deneme {i+1}/12)", 'progress': progress}
+                
+                status_result = self.check_consent_status(request_id)
+                
+                if isinstance(status_result, list) and status_result:
+                    # The job is done only if NO items are currently being processed.
+                    is_processing = any(item.get("status", "").lower() in ["enqueue", "processing"] for item in status_result)
+
+                    if not is_processing:
+                        yield {'status': 'info', 'message': "İşlem tamamlandı, sonuçlar işleniyor...", 'progress': 0.9}
+                        
+                        success_count = 0
+                        failure_count = 0
+
+                        # Create a list of recipients to map API response index to phone number
+                        recipient_list = df_deduplicated['ALICI'].tolist()
+
+                        for item in status_result:
+                            item_status = item.get("status", "").lower()
+                            original_index = item.get('index', -1)
+                            
+                            recipient = 'Bilinmeyen Alıcı'
+                            if 0 <= original_index < len(recipient_list):
+                                recipient = self.format_phone_number(recipient_list[original_index])
+
+                            if item_status in ["success", "completed"]:
+                                success_count += 1
+                            else: # failure or any other error status
+                                failure_count += 1
+                                error_info = item.get('error', {})
+                                error_message = error_info.get('message', 'Bilinmeyen hata.')
+                                yield {'status': 'error', 'message': f"Alıcı {recipient} (Sıra #{original_index}) başarısız: {error_message}"}
+                        
+                        summary_message = f"İşlem tamamlandı. Başarılı: {success_count}, Başarısız: {failure_count}."
+                        final_status = 'success' if failure_count == 0 else 'warning'
+                        yield {'status': final_status, 'message': summary_message, 'progress': 1.0}
+                        yield {'status': 'complete', 'message': 'Tüm işlemler bitti.', 'progress': 1.0}
+                        return
+
+            yield {'status': 'warning', 'message': "Sonuç beklenenden uzun sürdü. Lütfen IYS panelinden kontrol edin.", 'progress': 1.0}
+
+        except requests.exceptions.HTTPError as e:
+            error_details = e.response.text if e.response is not None else "No details from server."
+            logging.error(f"API Error - {str(e)} | Details: {error_details}")
+            yield {'status': 'error', 'message': f"API Hatası ({e.response.status_code}): Sunucu gönderilen veriyi geçersiz buldu. Detaylar: {error_details}", 'progress': 1.0}
         except Exception as e:
-            yield {'status': 'error', 'progress': 0, 'message': f"An error occurred during processing: {str(e)}"}
-            raise
+            logging.error(f"An unexpected error occurred: {str(e)}")
+            yield {'status': 'error', 'message': f"Beklenmedik bir hata oluştu: {str(e)}", 'progress': 1.0}

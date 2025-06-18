@@ -3,6 +3,11 @@ import pandas as pd
 from src.iys_uploader import IYSConsentUploader
 import logging
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file for local development
+# This line will be ignored in Streamlit Cloud where there is no .env file.
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,7 +37,8 @@ uploaded_file = st.file_uploader("Detaylı izin dosyasını (CSV) buraya sürük
 
 if uploaded_file:
     try:
-        df = pd.read_csv(uploaded_file)
+        # Ensure the 'ALICI' column is read as a string to prevent it being treated as a number
+        df = pd.read_csv(uploaded_file, dtype={'ALICI': str})
         st.header("2. Veri Önizlemesi ve Doğrulama")
         st.dataframe(df.head(), use_container_width=True)
         required_columns = {'ALICI', 'ONAY(1)-RET(0)', 'IZIN TARIHI', 'IZIN TURU', 'IZIN KAYNAGI'}
